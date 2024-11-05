@@ -1,0 +1,89 @@
+---
+title: "30 map challenge"
+author: "Xian Lu, Lee"
+date: "2024-11-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(sf)
+library(tmap)
+library(dplyr )
+setwd('C:/Users/xianl/OneDrive - PennO365/Datasets/30 map challenge/Data')
+
+ldn_rds <- st_read('./London LSOA 2011/gis_osm_roads_free_1.shp')
+ldn_rail <- st_read('./London LSOA 2011/gis_osm_railways_free_1.shp')
+
+ldn_water <- st_read('./London LSOA 2011/gis_osm_waterways_free_1.shp')
+ldn_rivers <- st_read('./London LSOA 2011/gis_osm_water_a_free_1.shp')
+```
+
+```{r}
+library(r5r)
+options(java.parameters = "-Xmx2G")
+
+# 1) build transport network, pointing to the path where OSM and GTFS data are stored
+library(r5r)
+path <- system.file("C:/Users/xianl/OneDrive - PennO365/Datasets/30 map challenge/Data/london.osm.pbf", package = "r5r")
+r5r_core <- setup_r5(data_path = "C:/Users/xianl/OneDrive - PennO365/Datasets/30 map challenge/Data")
+```
+
+
+```{r}
+tmap_mode('view')
+hikepoints <- st_read("C:/Users/xianl/OneDrive - PennO365/Datasets/30 map challenge/Data/greenwich-hike.geojson") #point geojson with id representing each location visited
+qtm(hikepoints,col=id)
+hike <- hikepoints %>% arrange(id) %>%  mutate(o_lon = sf::st_coordinates(.)[,1],#turn the geometry of encoded into lat lon (this is your origins )
+                o_lat = sf::st_coordinates(.)[,2]) %>% 
+                mutate(d_lon=lead(o_lon),#lead the origins to obtain corresponding destination pair
+                       d_lat=lead(o_lat)) %>% head(-2) #drop last row because there are no further destinations
+origins= hike %>% select(id)
+destinations <- hike %>% select(id,d_lat,d_lon) %>% st_drop_geometry() %>% st_as_sf(coords = c("d_lon", "d_lat"))
+
+st_crs(destinations)=st_crs(origins)
+qtm(destinations)
+# routing inputs
+mode <- c('walk')
+mode2 <- c('walk','subway','rail')
+departure_datetime <- as.POSIXct("27-11-2021 12:00:00",
+                                 format = "%d-%m-%Y %H:%M:%S")
+
+max_walk_time <- 100000
+det <- detailed_itineraries(r5r_core = r5r_core,
+                            origins = origins,
+                            destinations = destinations,
+                            mode = mode,
+                            departure_datetime = departure_datetime,
+                            max_walk_time = max_walk_time,
+                            suboptimal_minutes = 0,
+                            shortest_path = F,
+                            )
+qtm(det)
+leg2 <- hikepoints %>% filter(id%in%c('1','8')) %>% arrange(desc(id)) %>% mutate(id=row_number())%>%  mutate(o_lon = sf::st_coordinates(.)[,1],#turn the geometry of encoded into lat lon (this is your origins )
+                o_lat = sf::st_coordinates(.)[,2]) %>% 
+                mutate(d_lon=lead(o_lon),#lead the origins to obtain corresponding destination pair
+                       d_lat=lead(o_lat)) %>% head(-1) #drop last row because there are no further destinations
+origins= leg2 %>% select(id)
+destinations <- leg2 %>% select(id,d_lat,d_lon) %>% st_drop_geometry() %>% st_as_sf(coords = c("d_lon", "d_lat"))
+qtm(leg2)
+st_crs(destinations)=st_crs(origins)
+det2 <- detailed_itineraries(r5r_core = r5r_core,
+                            origins = origins,
+                            destinations = destinations,
+                            mode = mode,
+                            mode_egress = 'walk',
+                            departure_datetime = departure_datetime,
+                            max_walk_time = max_walk_time,
+                         
+                            shortest_path = T,
+                            )
+
+qtm(det2)
+network <- transit_network_to_sf(r5r_core = r5r_core) 
+qtm(network$routes)
+det %>% select(mode) %>% mutate(leg= row_number()) %>% rbind(det2 %>% select(mode) %>% mutate(leg=8)) %>% st_write('greenwich_routes.geojson')
+
+
+```
+
